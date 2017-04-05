@@ -49,6 +49,9 @@ fn write_str(f: &mut fmt::Formatter, s: &str) -> fmt::Result {
             '\u{d}' => try!(write!(f, "\\r")),
             '\u{22}' => try!(write!(f, "\\\"")),
             '\u{5c}' => try!(write!(f, "\\\\")),
+            c if c < '\u{1f}' => {
+                try!(write!(f, "\\u{:04}", ch as u32))
+            }
             ch => try!(write!(f, "{}", ch)),
         }
     }
@@ -57,24 +60,28 @@ fn write_str(f: &mut fmt::Formatter, s: &str) -> fmt::Result {
 
 impl<'a, 'b> Printer<'a, 'b> {
     fn print(&mut self, table: &'a TomlTable) -> fmt::Result {
+        let mut space_out_first = false;
         for (k, v) in table.iter() {
             match *v {
                 Table(..) => continue,
                 Array(ref a) => {
-                    match a.first() {
-                        Some(&Table(..)) => continue,
-                        _ => {}
+                    if let Some(&Table(..)) = a.first() {
+                        continue;
                     }
                 }
                 _ => {}
             }
+            space_out_first = true;
             try!(writeln!(self.output, "{} = {}", Key(&[k]), v));
         }
-        for (k, v) in table.iter() {
+        for (i, (k, v)) in table.iter().enumerate() {
             match *v {
                 Table(ref inner) => {
                     self.stack.push(k);
-                    try!(writeln!(self.output, "\n[{}]", Key(&self.stack)));
+                    if space_out_first || i != 0 {
+                        try!(write!(self.output, "\n"));
+                    }
+                    try!(writeln!(self.output, "[{}]", Key(&self.stack)));
                     try!(self.print(inner));
                     self.stack.pop();
                 }
@@ -84,8 +91,11 @@ impl<'a, 'b> Printer<'a, 'b> {
                         _ => continue
                     }
                     self.stack.push(k);
-                    for inner in inner.iter() {
-                        try!(writeln!(self.output, "\n[[{}]]", Key(&self.stack)));
+                    for (j, inner) in inner.iter().enumerate() {
+                        if space_out_first || i != 0 || j != 0 {
+                            try!(write!(self.output, "\n"));
+                        }
+                        try!(writeln!(self.output, "[[{}]]", Key(&self.stack)));
                         match *inner {
                             Table(ref inner) => try!(self.print(inner)),
                             _ => panic!("non-heterogeneous toml array"),
@@ -120,83 +130,5 @@ impl<'a> fmt::Display for Key<'a> {
             }
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-#[allow(warnings)]
-mod tests {
-    use Value;
-    use Value::{String, Integer, Float, Boolean, Datetime, Array, Table};
-    use std::collections::BTreeMap;
-
-    macro_rules! map( ($($k:expr => $v:expr),*) => ({
-        let mut _m = BTreeMap::new();
-        $(_m.insert($k.to_string(), $v);)*
-        _m
-    }) );
-
-    #[test]
-    fn simple_show() {
-        assert_eq!(String("foo".to_string()).to_string(),
-                   "\"foo\"");
-        assert_eq!(Integer(10).to_string(),
-                   "10");
-        assert_eq!(Float(10.0).to_string(),
-                   "10.0");
-        assert_eq!(Float(2.4).to_string(),
-                   "2.4");
-        assert_eq!(Boolean(true).to_string(),
-                   "true");
-        assert_eq!(Datetime("test".to_string()).to_string(),
-                   "test");
-        assert_eq!(Array(vec![]).to_string(),
-                   "[]");
-        assert_eq!(Array(vec![Integer(1), Integer(2)]).to_string(),
-                   "[1, 2]");
-    }
-
-    #[test]
-    fn table() {
-        assert_eq!(Table(map! { }).to_string(),
-                   "");
-        assert_eq!(Table(map! { "test" => Integer(2) }).to_string(),
-                   "test = 2\n");
-        assert_eq!(Table(map! {
-                        "test" => Integer(2),
-                        "test2" => Table(map! {
-                            "test" => String("wut".to_string())
-                        })
-                   }).to_string(),
-                   "test = 2\n\
-                    \n\
-                    [test2]\n\
-                    test = \"wut\"\n");
-        assert_eq!(Table(map! {
-                        "test" => Integer(2),
-                        "test2" => Table(map! {
-                            "test" => String("wut".to_string())
-                        })
-                   }).to_string(),
-                   "test = 2\n\
-                    \n\
-                    [test2]\n\
-                    test = \"wut\"\n");
-        assert_eq!(Table(map! {
-                        "test" => Integer(2),
-                        "test2" => Array(vec![Table(map! {
-                            "test" => String("wut".to_string())
-                        })])
-                   }).to_string(),
-                   "test = 2\n\
-                    \n\
-                    [[test2]]\n\
-                    test = \"wut\"\n");
-        assert_eq!(Table(map! {
-                        "foo.bar" => Integer(2),
-                        "foo\"bar" => Integer(2)
-                   }).to_string(),
-                   "\"foo\\\"bar\" = 2\n\
-                    \"foo.bar\" = 2\n");
     }
 }
